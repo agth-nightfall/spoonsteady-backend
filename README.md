@@ -1,8 +1,5 @@
 # SpoonSteady Backend (independent)
 
-Backend subscriber mandiri untuk frontend yang sudah ada. Tidak mengubah HTML,
-CSS, JavaScript, atau repository frontend temanmu.
-
 ## Alur
 HP 1 -> HiveMQ `spoonsteady/telemetry` -> (subscriber terpisah) backend Railway
 -> pemrosesan -> SQLite. HP 2 tetap menerima pesan langsung dari HiveMQ seperti
