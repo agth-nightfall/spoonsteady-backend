@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpoonSteady - Pemantau Tremor & Makan</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #f1f5f9;
+      color: #0f172a;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      margin: 12px 0;
+    }
+    button {
+      flex: 1;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .role-btn { background: #e2e8f0; color: #334155; }
+    .role-btn.active { background: #0284c7; color: white; }
+    .action-btn { background: #16a34a; color: white; width: 100%; font-size: 1rem; }
+    .val-box {
+      font-size: 1.8rem;
+      font-weight: bold;
+      margin: 8px 0;
+      color: #0284c7;
+    }
+    .log-area {
+      background: #0f172a;
+      color: #38bdf8;
+      font-family: monospace;
+      font-size: 0.75rem;
+      padding: 10px;
+      border-radius: 8px;
+      height: 100px;
+      overflow-y: auto;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>SpoonSteady 🥣</h2>
+    <p>Status: <b id="mqttStatus" style="color: red;">Terputus (Offline)</b></p>
+    
+    <div class="btn-group">
+      <button id="btnRole1" class="role-btn active" onclick="pilihMode('sensor')">📱 HP 1 (Sendok)</button>
+      <button id="btnRole2" class="role-btn" onclick="pilihMode('monitor')">🍽️ HP 2 (Meja)</button>
+    </div>
+
+    <button id="btnStart" class="action-btn" onclick="mulaiSistem()">Mulai Sistem</button>
+  </div>
+
+  <!-- Tampilan HP 1 -->
+  <div id="panelSensor" class="card">
+    <h3>Data Gerakan HP 1</h3>
+    <p>Getaran (RMS):</p>
+    <div class="val-box" id="dispRms">0.00 m/s²</div>
+    <p>Sudut Suapan (Kemiringan):</p>
+    <div class="val-box" id="dispPitch">0°</div>
+  </div>
+
+  <!-- Tampilan HP 2 -->
+  <div id="panelMonitor" class="card" style="display: none;">
+    <h3>Pantauan Meja HP 2</h3>
+    <p>Skor Kestabilan:</p>
+    <div class="val-box" id="dispScore">100%</div>
+    <p>Total Suapan:</p>
+    <div class="val-box" id="dispScoop">0 Kali</div>
+  </div>
+
+  <div class="card">
+    <div class="log-area" id="logBox">Menunggu sistem dimulai...</div>
+  </div>
+
+  <script>
+    const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+    const TOPIK = "spoonsteady/telemetry/demo";
+
+    let client = null;
+    let peran = "sensor";
+    let sudutSekarang = 0;
+    let suapanTerhitung = 0;
+    let sedangMenyuap = false;
+    let waktuTerakhir = 0;
+
+    function catatLog(teks) {
+      const box = document.getElementById("logBox");
+      const jam = new Date().toLocaleTimeString();
+      box.innerHTML = `[${jam}] ${teks}<br>` + box.innerHTML;
+    }
+
+    function pilihMode(mode) {
+      peran = mode;
+      document.getElementById("btnRole1").classList.toggle("active", mode === "sensor");
+      document.getElementById("btnRole2").classList.toggle("active", mode === "monitor");
+      document.getElementById("panelSensor").style.display = (mode === "sensor") ? "block" : "none";
+      document.getElementById("panelMonitor").style.display = (mode === "monitor") ? "block" : "none";
+      catatLog("Beralih ke mode: " + (mode === "sensor" ? "HP 1 (Sendok)" : "HP 2 (Meja)"));
+    }
+
+    function mulaiSistem() {
+      catatLog("Menghubungkan ke broker MQTT...");
+      document.getElementById("btnStart").innerText = "Menghubungkan...";
+
+      // Koneksi MQTT
+      try {
+        client = mqtt.connect(BROKER);
+
+        client.on("connect", function () {
+          document.getElementById("mqttStatus").innerText = "Terhubung (Online)";
+          document.getElementById("mqttStatus").style.color = "green";
+          document.getElementById("btnStart").innerText = "Sistem Aktif";
+          catatLog("Berhasil terhubung ke broker HiveMQ!");
+          client.subscribe(TOPIK);
+        });
+
+        client.on("message", function (topik, pesan) {
+          if (peran === "monitor") {
+            try {
+              const data = JSON.parse(pesan.toString());
+              perbaruiMonitor(data);
+            } catch (err) {}
+          }
+        });
+
+        client.on("error", function (err) {
+          catatLog("Kesalahan MQTT: " + err);
+        });
+      } catch (e) {
+        catatLog("Gagal menjalankan MQTT: " + e.message);
+      }
+
+      // Izin & Pengaktifan Sensor HP
+      if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+        DeviceMotionEvent.requestPermission().then(izin => {
+          if (izin === "granted") aktifkanSensor();
+          else catatLog("Izin sensor ditolak!");
+        }).catch(e => catatLog("Kesalahan izin sensor: " + e));
+      } else {
+        aktifkanSensor();
+      }
+    }
+
+    function aktifkanSensor() {
+      catatLog("Membaca pergerakan sensor...");
+
+      // Baca orientasi sudut
+      window.addEventListener("deviceorientation", function (e) {
+        if (e.beta !== null && e.beta !== undefined) {
+          sudutSekarang = Math.round(e.beta);
+          document.getElementById("dispPitch").innerText = sudutSekarang + "°";
+        }
+      });
+
+      // Baca akselerometer getaran
+      window.addEventListener("devicemotion", function (e) {
+        const acc = e.accelerationIncludingGravity;
+        if (!acc) return;
+
+        const ax = acc.x || 0;
+        const ay = acc.y || 0;
+        const az = acc.z || 0;
+
+        const total = Math.sqrt(ax * ax + ay * ay + az * az);
+        const getaran = Math.abs(total - 9.81);
+
+        // Perhitungan sudut cadangan jika orientasi bawaan belum terbaca
+        if (sudutSekarang === 0 && (ay !== 0 || az !== 0)) {
+          sudutSekarang = Math.round(Math.atan2(ay, Math.sqrt(ax * ax + az * az)) * (180 / Math.PI));
+          document.getElementById("dispPitch").innerText = sudutSekarang + "°";
+        }
+
+        document.getElementById("dispRms").innerText = getaran.toFixed(2) + " m/s²";
+
+        // Kirim data ke broker setiap 250 ms
+        const sekarang = Date.now();
+        if (peran === "sensor" && client && client.connected && (sekarang - waktuTerakhir > 250)) {
+          waktuTerakhir = sekarang;
+          client.publish(TOPIK, JSON.stringify({
+            rms: Number(getaran.toFixed(2)),
+            pitch: sudutSekarang
+          }));
+        }
+      });
+    }
+
+    function perbaruiMonitor(data) {
+      let skor = Math.max(10, Math.round(100 - (data.rms * 25)));
+      document.getElementById("dispScore").innerText = skor + "%";
+
+      if (data.pitch > 35 && !sedangMenyuap) {
+        sedangMenyuap = true;
+      } else if (data.pitch < 15 && sedangMenyuap) {
+        sedangMenyuap = false;
+        suapanTerhitung++;
+        document.getElementById("dispScoop").innerText = suapanTerhitung + " Kali";
+        catatLog("Suapan terdeteksi: " + suapanTerhitung);
+      }
+    }
+  </script>
+</body>
+</html>
