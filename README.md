@@ -1,4 +1,4 @@
-# SpoonSteady Backend (independent)
+# SpoonSteady Backend
 
 ## Alur
 HP 1 -> HiveMQ `spoonsteady/telemetry` -> (subscriber terpisah) backend Railway
